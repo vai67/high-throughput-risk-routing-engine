@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  # PostgreSQL with PostGIS
+  database:
+    image: postgis/postgis:15-3.3
+    container_name: urban_mobility_db
+    environment:
+      POSTGRES_DB: urban_mobility
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./database/seed_data.sql:/docker-entrypoint-initdb.d/02-seed.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching (optional but recommended)
+  redis:
+    image: redis:7-alpine
+    container_name: urban_mobility_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: urban_mobility_backend
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@database:5432/urban_mobility
+      REDIS_URL: redis://redis:6379
+      WEATHER_API_KEY: ${WEATHER_API_KEY}
+      MAPBOX_TOKEN: ${MAPBOX_TOKEN}
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn app:app --host 0.0.0.0 --port 5000 --reload
+
+  # Frontend (Nginx)
+  frontend:
+    image: nginx:alpine
+    container_name: urban_mobility_frontend
+    ports:
+      - "8080:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  default:
+    name: urban_mobility_network
